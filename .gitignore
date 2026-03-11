@@ -1,0 +1,30 @@
+# Swift / SPM
+.build/
+*.xcodeproj
+*.xcworkspace
+DerivedData/
+
+# 构建产物
+*.app
+Swift-*.swiftmodule
+*.swiftmodule
+*.o
+*.d
+*.dia
+*.swiftdeps
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+*.localized
+
+# 日志与临时
+*.log
+*.tmp
+*.temp
+*.swp
+*~
+
+# 可选：若不想把 Cursor/VS Code 配置提交到仓库，可取消下面注释
+.vscode/
