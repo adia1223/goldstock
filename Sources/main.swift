@@ -511,6 +511,48 @@ class StockService {
         return nil
     }
     
+    /// 按新浪 list 代码拉取（用于指数：sh000001 上证、sz399001 深证、sz399006 创业板）
+    func fetchIndexInfo(listCode: String) async -> StockInfo? {
+        let urlString = "https://hq.sinajs.cn/list=\(listCode)"
+        guard let url = URL(string: urlString) else { return nil }
+        var request = URLRequest(url: url)
+        request.setValue("https://finance.sina.com.cn", forHTTPHeaderField: "Referer")
+        request.setValue("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36", forHTTPHeaderField: "User-Agent")
+        do {
+            let (data, _) = try await session.data(for: request)
+            let text = String(data: data, encoding: .utf8)
+                ?? String(data: data, encoding: .init(rawValue: CFStringConvertEncodingToNSStringEncoding(CFStringEncoding(CFStringEncodings.GB_18030_2000.rawValue))))
+                ?? ""
+            let lines = text.components(separatedBy: ";")
+            for line in lines {
+                if line.contains("hq_str_\(listCode)") {
+                    let code = String(listCode.dropFirst(2))
+                    return parseSinaStockData(line, code: code)
+                }
+            }
+        } catch {
+            print("Index fetch error \(listCode): \(error)")
+        }
+        return nil
+    }
+    
+    /// 三大指数：上证、深证、创业板（固定顺序）
+    func fetchMainIndices() async -> [StockInfo] {
+        let listCodes = ["sh000001", "sz399001", "sz399006"]
+        var results: [StockInfo] = []
+        await withTaskGroup(of: StockInfo?.self) { group in
+            for listCode in listCodes {
+                group.addTask { await self.fetchIndexInfo(listCode: listCode) }
+            }
+            for await result in group {
+                if let info = result { results.append(info) }
+            }
+        }
+        // 保证顺序：上证、深证、创业板
+        let order = ["000001", "399001", "399006"]
+        return order.compactMap { code in results.first(where: { $0.code == code }) }
+    }
+    
     private func parseSinaStockData(_ line: String, code: String) -> StockInfo? {
         let cleanedLine = line.trimmingCharacters(in: .whitespacesAndNewlines)
         
@@ -1551,14 +1593,6 @@ private class StockRowView: NSView {
 
 // MARK: - ============ A股内容视图 ============
 
-/// 不响应滚轮事件的 ScrollView，用于让 A 股列表保持固定不滚动
-private class NonScrollingScrollView: NSScrollView {
-    override func scrollWheel(with event: NSEvent) {
-        // 禁止任何滚动
-        return
-    }
-}
-
 class StockContentView: NSView, NSTableViewDelegate, NSTableViewDataSource, NSTextFieldDelegate, NSMenuDelegate {
     private var allStocks: [StockInfo] = []
     private var displayStocks: [StockInfo] = []
@@ -1570,6 +1604,12 @@ class StockContentView: NSView, NSTableViewDelegate, NSTableViewDataSource, NSTe
     private var rateSortState: Int = 0
     private var headerView: StockTableHeaderView?
     private var scrollView: NSScrollView!
+
+    /// 三大指数区域（上证、深证、创业板）
+    private var indicesContainer: NSView!
+    private var indexNameLabels: [NSTextField] = []
+    private var indexValueLabels: [NSTextField] = []
+    private var indexChangeLabels: [NSTextField] = []
 
     // 内联输入条
     private var inputBar: NSView!
@@ -1600,6 +1640,56 @@ class StockContentView: NSView, NSTableViewDelegate, NSTableViewDataSource, NSTe
     
     private func setupUI() {
         wantsLayer = true
+
+        // ── 三大指数（顶部横排）────────────────────────────
+        let indexNames = ["上证指数", "深证成指", "创业板指"]
+        indicesContainer = NSView()
+        indicesContainer.translatesAutoresizingMaskIntoConstraints = false
+        let indicesStack = NSStackView(views: [])
+        indicesStack.orientation = .horizontal
+        indicesStack.distribution = .fillEqually
+        indicesStack.spacing = 8
+        indicesStack.translatesAutoresizingMaskIntoConstraints = false
+        for name in indexNames {
+            let block = NSView()
+            block.translatesAutoresizingMaskIntoConstraints = false
+            let nameLabel = NSTextField(labelWithString: name)
+            nameLabel.font = NSFont.systemFont(ofSize: 12, weight: .medium)
+            nameLabel.textColor = NSColor(white: 0.15, alpha: 1)
+            nameLabel.alignment = .center
+            nameLabel.translatesAutoresizingMaskIntoConstraints = false
+            let valueLabel = NSTextField(labelWithString: "--")
+            valueLabel.font = NSFont.monospacedDigitSystemFont(ofSize: 16, weight: .semibold)
+            valueLabel.textColor = NSColor(white: 0.5, alpha: 1)
+            valueLabel.alignment = .center
+            valueLabel.translatesAutoresizingMaskIntoConstraints = false
+            let changeLabel = NSTextField(labelWithString: "-- --%")
+            changeLabel.font = NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .regular)
+            changeLabel.textColor = NSColor(white: 0.5, alpha: 1)
+            changeLabel.alignment = .center
+            changeLabel.translatesAutoresizingMaskIntoConstraints = false
+            let colStack = NSStackView(views: [nameLabel, valueLabel, changeLabel])
+            colStack.orientation = .vertical
+            colStack.alignment = .centerX
+            colStack.spacing = 2
+            colStack.translatesAutoresizingMaskIntoConstraints = false
+            block.addSubview(colStack)
+            NSLayoutConstraint.activate([
+                colStack.centerXAnchor.constraint(equalTo: block.centerXAnchor),
+                colStack.centerYAnchor.constraint(equalTo: block.centerYAnchor),
+            ])
+            indicesStack.addArrangedSubview(block)
+            indexNameLabels.append(nameLabel)
+            indexValueLabels.append(valueLabel)
+            indexChangeLabels.append(changeLabel)
+        }
+        indicesContainer.addSubview(indicesStack)
+        NSLayoutConstraint.activate([
+            indicesStack.topAnchor.constraint(equalTo: indicesContainer.topAnchor),
+            indicesStack.leadingAnchor.constraint(equalTo: indicesContainer.leadingAnchor),
+            indicesStack.trailingAnchor.constraint(equalTo: indicesContainer.trailingAnchor),
+            indicesStack.bottomAnchor.constraint(equalTo: indicesContainer.bottomAnchor),
+        ])
 
         // ── Header ──────────────────────────────────────
         let titleLabel = NSTextField(labelWithString: "自选")
@@ -1633,13 +1723,14 @@ class StockContentView: NSView, NSTableViewDelegate, NSTableViewDataSource, NSTe
         removeButton.layer?.cornerRadius = 5
         removeButton.translatesAutoresizingMaskIntoConstraints = false
 
-        // ── TableView ────────────────────────────────────
-        scrollView = NonScrollingScrollView()
-        scrollView.hasVerticalScroller = false   // 不再允许滚动显示
+        // ── TableView（可滚动，多只自选时显示垂直滚动条）────────────────
+        scrollView = NSScrollView()
+        scrollView.hasVerticalScroller = true
         scrollView.hasHorizontalScroller = false
         scrollView.borderType = .noBorder
         scrollView.drawsBackground = false
         scrollView.translatesAutoresizingMaskIntoConstraints = false
+        scrollView.autohidesScrollers = true
 
         tableView = NSTableView()
         tableView.delegate = self
@@ -1659,6 +1750,10 @@ class StockContentView: NSView, NSTableViewDelegate, NSTableViewDataSource, NSTe
         column.resizingMask = .autoresizingMask
         tableView.addTableColumn(column)
         scrollView.documentView = tableView
+        // 表头置于 contentView 之上，否则会被 clipView 挡住导致「涨幅」点击无效
+        if let header = tableView.headerView {
+            scrollView.addSubview(header, positioned: .above, relativeTo: scrollView.contentView)
+        }
 
         // 右键菜单（置顶）
         let contextMenu = NSMenu()
@@ -1749,6 +1844,7 @@ class StockContentView: NSView, NSTableViewDelegate, NSTableViewDataSource, NSTe
         suggestionBox.isHidden = true
         suggestionBox.translatesAutoresizingMaskIntoConstraints = false
 
+        addSubview(indicesContainer)
         addSubview(titleLabel)
         addSubview(addButton)
         addSubview(removeButton)
@@ -1763,8 +1859,13 @@ class StockContentView: NSView, NSTableViewDelegate, NSTableViewDataSource, NSTe
         scrollTopConstraint.isActive = true
 
         NSLayoutConstraint.activate([
+            indicesContainer.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 8),
+            indicesContainer.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -8),
+            indicesContainer.topAnchor.constraint(equalTo: topAnchor, constant: 10),
+            indicesContainer.heightAnchor.constraint(equalToConstant: 56),
+
             titleLabel.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 12),
-            titleLabel.topAnchor.constraint(equalTo: topAnchor, constant: 10),
+            titleLabel.topAnchor.constraint(equalTo: indicesContainer.bottomAnchor, constant: 12),
 
             removeButton.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -10),
             removeButton.centerYAnchor.constraint(equalTo: titleLabel.centerYAnchor),
@@ -2094,17 +2195,42 @@ class StockContentView: NSView, NSTableViewDelegate, NSTableViewDataSource, NSTe
         StockStorage.shared.savedStocks = newStocks
         refreshDisplay()
     }
-    
+
+    /// 更新三大指数展示（上证、深证、创业板，顺序固定）
+    func updateIndices(_ indices: [StockInfo]) {
+        let upColor = NSColor(red: 0.85, green: 0.18, blue: 0.18, alpha: 1)
+        let dnColor = NSColor(red: 0.06, green: 0.55, blue: 0.25, alpha: 1)
+        let flatColor = NSColor(white: 0.45, alpha: 1)
+        for (i, label) in indexValueLabels.enumerated() {
+            guard i < indices.count else {
+                label.stringValue = "--"
+                label.textColor = NSColor(white: 0.5, alpha: 1)
+                indexChangeLabels[i].stringValue = "-- --%"
+                indexChangeLabels[i].textColor = NSColor(white: 0.5, alpha: 1)
+                continue
+            }
+            let info = indices[i]
+            label.stringValue = info.currentPrice.isEmpty || info.currentPrice == "--" ? "--" : info.currentPrice
+            let color: NSColor
+            if info.isUp { color = upColor }
+            else if info.isDown { color = dnColor }
+            else { color = flatColor }
+            label.textColor = color
+            let changeText = "\(info.changeAmount) \(info.changeRate)"
+            indexChangeLabels[i].stringValue = changeText.isEmpty ? "-- --%" : changeText
+            indexChangeLabels[i].textColor = color
+        }
+    }
+
     @objc private func toggleRateSort() {
-        // 保持固定顺序，不再切换排序
         // 0 → 1(降序) → -1(升序) → 0(原序)
-        // switch rateSortState {
-        // case 0:  rateSortState =  1
-        // case 1:  rateSortState = -1
-        // default: rateSortState =  0
-        // }
-        // headerView?.rateSortState = rateSortState
-        // refreshDisplay()
+        switch rateSortState {
+        case 0:  rateSortState =  1
+        case 1:  rateSortState = -1
+        default: rateSortState =  0
+        }
+        headerView?.rateSortState = rateSortState
+        refreshDisplay()
     }
 
     private func rateValue(_ stock: StockInfo) -> Double {
@@ -2129,6 +2255,14 @@ class StockContentView: NSView, NSTableViewDelegate, NSTableViewDataSource, NSTe
         }
         displayStocks = sorted
         tableView.reloadData()
+
+        // 设置 documentView 高度，多行时才能正常滚动
+        let headerHeight = tableView.headerView?.frame.height ?? 28
+        let contentHeight = headerHeight + CGFloat(displayStocks.count) * tableView.rowHeight
+        var frame = tableView.frame
+        frame.size.height = max(contentHeight, scrollView.bounds.height)
+        if frame.width <= 0 { frame.size.width = scrollView.bounds.width }
+        tableView.frame = frame
 
         if let lastUpdate = displayStocks.first?.lastUpdate {
             let formatter = DateFormatter()
@@ -2374,6 +2508,10 @@ class MainContentView: NSView {
         stockContentView.updateStocks(stocks)
     }
 
+    func updateIndices(_ indices: [StockInfo]) {
+        stockContentView.updateIndices(indices)
+    }
+
     func getCurrentMode() -> String {
         return currentMode
     }
@@ -2392,6 +2530,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var prices = GoldPrices()
     private var funds: [FundInfo] = []
     private var stocks: [StockInfo] = []
+    private var mainIndices: [StockInfo] = []  // 上证、深证、创业板
     private var refreshTimer: Timer?
     private var refreshInterval: TimeInterval = 5.0
 
@@ -2596,6 +2735,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             stocks = codes.compactMap { byCode[$0] }
         }
 
+        // 刷新三大指数（上证、深证、创业板）
+        mainIndices = await StockService.shared.fetchMainIndices()
+
         updateUI()
     }
 
@@ -2681,6 +2823,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // Update content views
         mainContentView?.updateGoldPrices(prices)
         mainContentView?.updateStocks(stocks)
+        mainContentView?.updateIndices(mainIndices)
 
         // 显示模式菜单勾选（表示当前状态栏显示的是黄金还是 A 股）
         if let submenu = displayModeItem.submenu {
