@@ -692,9 +692,16 @@ class FundStorage {
 
     private let fundsKey = "savedFunds"
     private let categoriesKey = "savedCategories"
-    private let displayModeKey = "displayMode"  // "gold" or "fund"
+    private let displayModeKey = "displayMode"  // 悬浮窗当前页签 "gold" or "stock"
+    private let statusBarDisplayModeKey = "statusBarDisplayMode"  // 状态栏显示 "gold" or "stock"，与悬浮窗独立
 
     private init() {}
+
+    /// 状态栏显示模式（仅影响菜单栏显示内容，与悬浮窗页签无关）
+    var statusBarDisplayMode: String {
+        get { UserDefaults.standard.string(forKey: statusBarDisplayModeKey) ?? "gold" }
+        set { UserDefaults.standard.set(newValue, forKey: statusBarDisplayModeKey) }
+    }
 
     // 保存的基金列表
     var savedFunds: [FundInfo] {
@@ -735,7 +742,7 @@ class FundStorage {
         }
     }
 
-    // 显示模式
+    /// 悬浮窗当前页签（与状态栏显示独立）
     var displayMode: String {
         get { UserDefaults.standard.string(forKey: displayModeKey) ?? "gold" }
         set { UserDefaults.standard.set(newValue, forKey: displayModeKey) }
@@ -2340,7 +2347,7 @@ class MainContentView: NSView {
         }
         FundStorage.shared.displayMode = currentMode
         updateDisplay()
-        // 立即同步更新状态栏
+        // 仅刷新菜单等 UI，状态栏仍按 statusBarDisplayMode 显示，不联动
         appDelegate?.updateUI()
     }
 
@@ -2618,9 +2625,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     @MainActor
     func updateUI() {
-        // Status bar
+        // Status bar（仅由「显示模式」菜单控制，与悬浮窗页签无关）
         if let button = statusItem.button {
-            let mode = mainContentView?.getCurrentMode() ?? "gold"
+            let mode = FundStorage.shared.statusBarDisplayMode
             if mode == "gold" {
                 let info = prices.priceInfo(for: statusBarPriceKey)
                 button.title = "金: \(info.price)"
@@ -2675,11 +2682,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         mainContentView?.updateGoldPrices(prices)
         mainContentView?.updateStocks(stocks)
 
-        // Update display mode menu
+        // 显示模式菜单勾选（表示当前状态栏显示的是黄金还是 A 股）
         if let submenu = displayModeItem.submenu {
             for item in submenu.items {
                 let mode = item.representedObject as? String ?? ""
-                item.state = mode == FundStorage.shared.displayMode ? .on : .off
+                item.state = mode == FundStorage.shared.statusBarDisplayMode ? .on : .off
             }
         }
     }
@@ -2710,8 +2717,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
         sender.state = .on
 
-        // 同步切换悬浮窗 Tab（内部也会保存 displayMode）
-        mainContentView?.setMode(mode)
+        // 仅更新状态栏显示模式，不联动悬浮窗页签
+        FundStorage.shared.statusBarDisplayMode = mode
         updateUI()
     }
 
