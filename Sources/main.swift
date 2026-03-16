@@ -2192,7 +2192,6 @@ class StockContentView: NSView, NSTableViewDelegate, NSTableViewDataSource, NSTe
     
     func updateStocks(_ newStocks: [StockInfo]) {
         self.allStocks = newStocks
-        StockStorage.shared.savedStocks = newStocks
         refreshDisplay()
     }
 
@@ -2732,7 +2731,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             let codes = savedStocks.map { $0.code }
             let fetched = await StockService.shared.fetchAllStocks(codes: codes)
             let byCode = Dictionary(uniqueKeysWithValues: fetched.map { ($0.code, $0) })
-            stocks = codes.compactMap { byCode[$0] }
+            let savedByCode = Dictionary(uniqueKeysWithValues: savedStocks.map { ($0.code, $0) })
+            // 网络偶发缺失或超时时，保留本地已保存的股票，避免列表短暂消失
+            stocks = codes.compactMap { byCode[$0] ?? savedByCode[$0] }
         }
 
         // 刷新三大指数（上证、深证、创业板）
@@ -2760,7 +2761,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             let codes = savedStocks.map { $0.code }
             let fetched = await StockService.shared.fetchAllStocks(codes: codes)
             let byCode = Dictionary(uniqueKeysWithValues: fetched.map { ($0.code, $0) })
-            stocks = codes.compactMap { byCode[$0] }
+            let savedByCode = Dictionary(uniqueKeysWithValues: savedStocks.map { ($0.code, $0) })
+            // 网络偶发缺失或超时时，保留本地已保存的股票，避免列表短暂消失
+            stocks = codes.compactMap { byCode[$0] ?? savedByCode[$0] }
             updateUI()
         }
     }
