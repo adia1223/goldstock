@@ -457,6 +457,20 @@ struct StockInfo: Codable, Identifiable {
         self.code = code
         self.name = name
     }
+
+    /// 仅保留自选身份信息（代码/名称），清空可能过期的行情字段。
+    /// 用于断网或请求失败时，避免展示上次缓存的旧价格造成误导。
+    func clearingQuoteFields() -> StockInfo {
+        var copy = self
+        copy.currentPrice = "--"
+        copy.yesterdayPrice = "--"
+        copy.changeAmount = "--"
+        copy.changeRate = "--"
+        copy.volume = ""
+        copy.amount = ""
+        copy.lastUpdate = nil
+        return copy
+    }
 }
 
 // MARK: - ============ A股服务 ============
@@ -1777,7 +1791,7 @@ class StockContentView: NSView, NSTableViewDelegate, NSTableViewDataSource, NSTe
         inputBar.isHidden = true
 
         inputField = NSTextField()
-        inputField.placeholderString = "输入代码（如 600）或名称"
+        inputField.placeholderString = "输入代码或名称"
         inputField.font = NSFont.systemFont(ofSize: 12)
         inputField.textColor = NSColor(white: 0.15, alpha: 1)
         inputField.backgroundColor = .white
@@ -1900,7 +1914,8 @@ class StockContentView: NSView, NSTableViewDelegate, NSTableViewDataSource, NSTe
     }
     
     private func loadSavedData() {
-        allStocks = StockStorage.shared.savedStocks
+        // 本地仅恢复自选列表，不直接展示可能过期的历史行情。
+        allStocks = StockStorage.shared.savedStocks.map { $0.clearingQuoteFields() }
         refreshDisplay()
     }
     
@@ -2731,9 +2746,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             let codes = savedStocks.map { $0.code }
             let fetched = await StockService.shared.fetchAllStocks(codes: codes)
             let byCode = Dictionary(uniqueKeysWithValues: fetched.map { ($0.code, $0) })
-            let savedByCode = Dictionary(uniqueKeysWithValues: savedStocks.map { ($0.code, $0) })
-            // 网络偶发缺失或超时时，保留本地已保存的股票，避免列表短暂消失
-            stocks = codes.compactMap { byCode[$0] ?? savedByCode[$0] }
+            let fallbackByCode = Dictionary(uniqueKeysWithValues: savedStocks.map { ($0.code, $0.clearingQuoteFields()) })
+            // 网络失败时仅保留自选列表，不展示历史缓存的旧行情。
+            stocks = codes.compactMap { byCode[$0] ?? fallbackByCode[$0] }
         }
 
         // 刷新三大指数（上证、深证、创业板）
@@ -2761,9 +2776,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             let codes = savedStocks.map { $0.code }
             let fetched = await StockService.shared.fetchAllStocks(codes: codes)
             let byCode = Dictionary(uniqueKeysWithValues: fetched.map { ($0.code, $0) })
-            let savedByCode = Dictionary(uniqueKeysWithValues: savedStocks.map { ($0.code, $0) })
-            // 网络偶发缺失或超时时，保留本地已保存的股票，避免列表短暂消失
-            stocks = codes.compactMap { byCode[$0] ?? savedByCode[$0] }
+            let fallbackByCode = Dictionary(uniqueKeysWithValues: savedStocks.map { ($0.code, $0.clearingQuoteFields()) })
+            // 网络失败时仅保留自选列表，不展示历史缓存的旧行情。
+            stocks = codes.compactMap { byCode[$0] ?? fallbackByCode[$0] }
             updateUI()
         }
     }
